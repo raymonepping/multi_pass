@@ -1,5 +1,7 @@
 # multi_pass
 
+> **New to Vault?** See [docs/vault-getting-started.md](docs/vault-getting-started.md) for a hands-on walkthrough: shell setup, reading and writing secrets, Transit encryption, PKI, policies, and more.
+
 A fully automated lab for running a three-node HashiCorp Vault Enterprise cluster on local RHEL 9 VMs using [Multipass](https://multipass.run). Infrastructure is provisioned with Terraform, the OS and Vault bootstrap layer is driven by shell scripts, and ongoing Vault configuration is managed as code through the Vault Terraform provider.
 
 ## Architecture
