@@ -1,0 +1,38 @@
+---
+- name: Build a first-apply-safe in-memory inventory from Terraform outputs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    vault_nodes: "{{ vault_nodes_json | from_json }}"
+  tasks:
+    - name: Validate the non-secret Terraform handoff
+      ansible.builtin.assert:
+        that:
+          - vault_nodes | length == 3
+          - vault_nodes.keys() | sort == ['vault-1', 'vault-2', 'vault-3']
+          - ansible_private_key_file is file
+          - ansible_known_hosts_file is file
+        fail_msg: >-
+          Terraform did not provide the expected three-node topology or the
+          dedicated SSH trust material is absent.
+
+    - name: Add Terraform-managed nodes to the in-memory Vault group
+      ansible.builtin.add_host:
+        name: "{{ item.key }}"
+        groups: vault
+        ansible_host: "{{ item.value.ansible_host }}"
+        vault_role: "{{ item.value.vault_role }}"
+        ansible_user: ubuntu
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_python_interpreter: /usr/bin/python3.9
+        ansible_ssh_private_key_file: "{{ ansible_private_key_file }}"
+        ansible_ssh_common_args: >-
+          -F /dev/null -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ ansible_known_hosts_file }}
+      loop: "{{ vault_nodes | dict2items }}"
+      changed_when: false
+
+- import_playbook: site.yml

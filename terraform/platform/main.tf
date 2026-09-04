@@ -1,3 +1,11 @@
+data "terraform_remote_state" "deployment" {
+  backend = "local"
+
+  config = {
+    path = abspath("${path.module}/../infra/terraform.tfstate")
+  }
+}
+
 resource "vault_namespace" "this" {
   for_each = var.namespaces
   path     = each.value

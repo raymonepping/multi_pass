@@ -2,7 +2,7 @@
 # site.yml — full Vault cluster bootstrap playbook
 #
 # Usage:
-#   ansible-playbook -i ansible/inventory/terraform.py ansible/site.yml
+#   make ansible-converge
 #
 # Run individual phases with tags:
 #   ansible-playbook ... --tags tls
@@ -11,17 +11,20 @@
 #   ansible-playbook ... --tags configure
 #   ansible-playbook ... --tags bootstrap
 
-- name: Phase 2 — OS and Vault bootstrap
+- name: Phase 2 — RHEL and Vault convergence
   hosts: vault
   gather_facts: true
-  serial: "100%"   # all nodes in parallel except where roles use run_once / delegate_to
+  serial: "100%"
 
   roles:
-    - role: tls
-      tags: tls
+    - role: rhel_prepare
+      tags: rhel
 
     - role: vault_install
       tags: install
+
+    - role: tls
+      tags: tls
 
     - role: vault_license
       tags: license
@@ -31,3 +34,6 @@
 
     - role: vault_bootstrap
       tags: bootstrap
+
+    - role: vault_validate
+      tags: validate

@@ -9,5 +9,8 @@ terraform {
   }
 }
 
-# VAULT_ADDR, VAULT_TOKEN, and VAULT_CACERT are supplied by scripts/platform.sh.
-provider "vault" {}
+# The non-secret address comes from deployment state. VAULT_TOKEN and
+# VAULT_CACERT remain process-environment inputs supplied by scripts/platform.sh.
+provider "vault" {
+  address = data.terraform_remote_state.deployment.outputs.vault_api_addresses["vault-1"]
+}

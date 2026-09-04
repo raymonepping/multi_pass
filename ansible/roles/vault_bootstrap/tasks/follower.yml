@@ -1,0 +1,30 @@
+---
+- name: Wait for {{ vault_target }} seal-status endpoint
+  ansible.builtin.uri:
+    url: "https://{{ hostvars[vault_target].ansible_host }}:8200/v1/sys/seal-status"
+    ca_path: "{{ tls_dir }}/ca.crt"
+    return_content: true
+    status_code: 200
+  register: follower_status
+  until: follower_status.status == 200
+  retries: 30
+  delay: 2
+  delegate_to: localhost
+  become: false
+
+- name: Join {{ vault_target }} to the leader's Raft cluster
+  ansible.builtin.uri:
+    url: "https://{{ hostvars[vault_target].ansible_host }}:8200/v1/sys/storage/raft/join"
+    ca_path: "{{ tls_dir }}/ca.crt"
+    method: PUT
+    body_format: json
+    body:
+      leader_api_addr: "https://{{ hostvars[vault_leader].ansible_host }}:8200"
+      leader_ca_cert: "{{ lookup('file', tls_dir + '/ca.crt') }}"
+    status_code: [200, 204]
+  delegate_to: localhost
+  become: false
+  when: not follower_status.json.initialized
+
+- name: Unseal {{ vault_target }} after joining
+  ansible.builtin.include_tasks: unseal.yml

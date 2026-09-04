@@ -1,0 +1,89 @@
+---
+- name: Require the Vault service to be active
+  ansible.builtin.systemd_service:
+    name: vault
+  register: vault_service
+  failed_when: vault_service.status.ActiveState != 'active'
+
+- name: Read SELinux enforcement state
+  ansible.builtin.command: getenforce
+  register: selinux_mode
+  changed_when: false
+  failed_when: selinux_mode.stdout != 'Enforcing'
+
+- name: Check for active swap
+  ansible.builtin.command:
+    argv: [swapon, --show, --noheadings]
+  register: active_swap
+  changed_when: false
+  failed_when: active_swap.stdout | trim | length > 0
+
+- name: Read open firewall ports
+  ansible.builtin.command:
+    argv: [firewall-cmd, --list-ports]
+  register: firewall_ports
+  changed_when: false
+  failed_when: >-
+    '8200/tcp' not in firewall_ports.stdout.split() or
+    '8201/tcp' not in firewall_ports.stdout.split()
+
+- name: Read Vault health with verified TLS
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:8200/v1/sys/health?standbyok=true&perfstandbyok=true"
+    ca_path: "{{ tls_dir }}/ca.crt"
+    return_content: true
+    status_code: 200
+  register: vault_health
+  delegate_to: localhost
+  become: false
+
+- name: Record whether this node is active
+  ansible.builtin.set_fact:
+    vault_is_active: "{{ not vault_health.json.standby and not vault_health.json.performance_standby }}"
+
+- name: Require one active node and two standbys
+  ansible.builtin.assert:
+    that:
+      - groups['vault'] | map('extract', hostvars, 'vault_is_active') | select('equalto', true) | list | length == 1
+      - groups['vault'] | map('extract', hostvars, 'vault_is_active') | select('equalto', false) | list | length == 2
+  run_once: true
+
+- name: Load initialization material for authenticated validation
+  ansible.builtin.slurp:
+    src: "{{ secrets_dir }}/vault-init.json"
+  register: validation_init_raw
+  no_log: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Verify Raft voters and Enterprise license
+  no_log: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+  vars:
+    validation_root_token: "{{ (validation_init_raw.content | b64decode | from_json).root_token }}"
+  block:
+    - name: Read Raft configuration
+      ansible.builtin.uri:
+        url: "https://{{ hostvars[vault_leader].ansible_host }}:8200/v1/sys/storage/raft/configuration"
+        ca_path: "{{ tls_dir }}/ca.crt"
+        headers:
+          X-Vault-Token: "{{ validation_root_token }}"
+        return_content: true
+        status_code: 200
+      register: validated_raft
+
+    - name: Require exactly three Raft voters
+      ansible.builtin.assert:
+        that:
+          - validated_raft.json.data.config.servers | selectattr('voter', 'equalto', true) | list | length == 3
+
+    - name: Require an active Enterprise license
+      ansible.builtin.uri:
+        url: "https://{{ hostvars[vault_leader].ansible_host }}:8200/v1/sys/license/status"
+        ca_path: "{{ tls_dir }}/ca.crt"
+        headers:
+          X-Vault-Token: "{{ validation_root_token }}"
+        status_code: 200

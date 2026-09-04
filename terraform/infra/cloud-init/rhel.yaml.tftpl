@@ -8,7 +8,7 @@ bootcmd:
 package_update: false
 package_upgrade: false
 
-# Inject the operator's public key so Ansible can reach the node directly
-# without going through `multipass exec`. Add additional keys as needed.
+# Only the dedicated lab controller public key is rendered here. Its private
+# half stays outside Terraform under .secrets/ansible/.
 ssh_authorized_keys:
-  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO7sYVTsOkIx4spTQc/I+DSNuuqf2tnU4j1hA4Mkj3r/ repping@gmail.com
+  - ${ansible_public_key}

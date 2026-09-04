@@ -2,6 +2,7 @@
 # 📝 Prompts (local dev notes, not for publication)
 ########################################
 prompts/
+input/
 
 ########################################
 # 🔧 General OS and Editor Files
@@ -80,6 +81,8 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
+.build/
+.ansible/
 nosetests.xml
 coverage.xml
 .hypothesis/
@@ -130,6 +133,7 @@ docker-compose.override.yml
 *.tfplan
 *.backup
 .terraform.lock.hcl
+!terraform/**/.terraform.lock.hcl
 *.log
 crash.log
 justfile
@@ -217,4 +221,3 @@ pgpass
 kubeconfig
 .kubeconfig
 kube/config
-

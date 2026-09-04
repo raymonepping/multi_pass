@@ -1,0 +1,112 @@
+---
+- name: Require RHEL 9 on ARM64
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture == 'aarch64'
+      - ansible_distribution == 'RedHat'
+      - ansible_distribution_major_version == '9'
+      - ansible_selinux.status == 'enabled'
+      - ansible_selinux.mode == 'enforcing'
+    fail_msg: "{{ inventory_hostname }} must be RHEL 9 ARM64 with SELinux enforcing."
+
+- name: Test Red Hat endpoint resolution
+  ansible.builtin.command:
+    argv: [getent, ahosts, subscription.rhsm.redhat.com]
+  register: rhsm_dns
+  changed_when: false
+  failed_when: false
+
+- name: Repair a DNS-only Multipass failure through NetworkManager
+  when: rhsm_dns.rc != 0
+  block:
+    - name: Verify raw HTTPS connectivity before changing DNS
+      ansible.builtin.command:
+        argv: [curl, -kfsS, --connect-timeout, "5", --max-time, "10", https://1.1.1.1/]
+      changed_when: false
+
+    - name: Read the active NetworkManager connection
+      ansible.builtin.command:
+        argv: [nmcli, -g, GENERAL.CONNECTION, device, show, eth0]
+      register: network_connection
+      changed_when: false
+
+    - name: Configure the approved fallback resolvers
+      ansible.builtin.command:
+        argv:
+          - nmcli
+          - connection
+          - modify
+          - "{{ network_connection.stdout }}"
+          - ipv4.ignore-auto-dns
+          - "yes"
+          - ipv4.dns
+          - "{{ lookup('env', 'RHEL_DNS_SERVERS') | default('1.1.1.1,1.0.0.1', true) }}"
+      changed_when: true
+
+    - name: Reapply the NetworkManager connection
+      ansible.builtin.command:
+        argv: [nmcli, device, reapply, eth0]
+      changed_when: true
+
+    - name: Require Red Hat endpoint resolution after repair
+      ansible.builtin.command:
+        argv: [getent, ahosts, subscription.rhsm.redhat.com]
+      register: repaired_dns
+      changed_when: false
+      retries: 10
+      delay: 1
+      until: repaired_dns.rc == 0
+
+- name: Check whether firewalld is installed
+  ansible.builtin.stat:
+    path: /usr/bin/firewall-cmd
+  register: firewall_command
+
+- name: Prepare RHEL package access when firewalld is absent
+  when: not firewall_command.stat.exists
+  block:
+    - name: Check Red Hat registration
+      ansible.builtin.command:
+        argv: [subscription-manager, identity]
+      register: rhsm_identity
+      changed_when: false
+      failed_when: false
+
+    - name: Require activation-key inputs for an unregistered guest
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'RHSM_ORG') | length > 0
+          - lookup('env', 'RHSM_ACTIVATION_KEY') | length > 0
+        fail_msg: >-
+          RHEL registration is required. Export RHSM_ORG and
+          RHSM_ACTIVATION_KEY, then rerun make lab.
+      no_log: true
+      when: rhsm_identity.rc != 0
+
+    - name: Register with Red Hat using the supplied activation key
+      ansible.builtin.command:
+        argv:
+          - subscription-manager
+          - register
+          - "--org={{ lookup('env', 'RHSM_ORG') }}"
+          - "--activationkey={{ lookup('env', 'RHSM_ACTIVATION_KEY') }}"
+      no_log: true
+      when: rhsm_identity.rc != 0
+
+    - name: Require an enabled RHEL repository
+      ansible.builtin.command:
+        argv: [dnf, repolist, --enabled]
+      register: enabled_repositories
+      changed_when: false
+      failed_when: enabled_repositories.rc != 0 or 'repo id' not in enabled_repositories.stdout | lower
+
+    - name: Install firewalld from the enabled RHEL repositories
+      ansible.builtin.dnf:
+        name: firewalld
+        state: present
+
+- name: Enable and start firewalld
+  ansible.builtin.systemd_service:
+    name: firewalld
+    state: started
+    enabled: true

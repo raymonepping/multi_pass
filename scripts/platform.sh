@@ -17,10 +17,9 @@ plan | apply | validate) ;;
 *) die "Usage: $0 {plan|apply|validate}" ;;
 esac
 
-VAULT_ADDR="https://$(node_ip vault-1):8200"
 export VAULT_CACERT="${TLS_DIR}/ca.crt"
 VAULT_TOKEN="$(<"${PLATFORM_TOKEN_FILE}")"
-export VAULT_ADDR VAULT_TOKEN
+export VAULT_TOKEN
 
 terraform -chdir="${PLATFORM_DIR}" init
 

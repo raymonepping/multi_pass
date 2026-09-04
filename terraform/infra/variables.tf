@@ -39,3 +39,14 @@ variable "command_timeout_seconds" {
   type    = number
   default = 900
 }
+
+variable "ansible_public_key_path" {
+  description = "Optional absolute path to the dedicated lab SSH public key."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.ansible_public_key_path == null || startswith(var.ansible_public_key_path, "/")
+    error_message = "ansible_public_key_path must be null or an absolute path."
+  }
+}

@@ -5,7 +5,7 @@ SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "${SCRIPT_DIR}/common.sh"
 
-for command_name in terraform multipass jq openssl curl unzip shasum file; do
+for command_name in terraform multipass ansible-playbook ansible-galaxy jq openssl curl unzip shasum file ssh-keygen ssh-keyscan; do
   require_cmd "${command_name}"
 done
 
@@ -16,7 +16,12 @@ terraform version | head -n 1
 multipass version
 
 terraform -chdir="${INFRA_DIR}" fmt -check -recursive
+terraform -chdir="${ROOT_DIR}/terraform/ansible" fmt -check -recursive
 terraform -chdir="${PLATFORM_DIR}" fmt -check -recursive
+
+ansible_core_version="$(ANSIBLE_LOCAL_TEMP="${TMPDIR:-/tmp}/vault-lab-ansible-tmp" ansible --version | awk 'NR == 1 { gsub(/[][]/, "", $3); print $3 }')"
+python_version="$(python3 -c 'import platform; print(platform.python_version())')"
+info "Ansible Core ${ansible_core_version}; controller Python ${python_version}"
 
 if git -C "${ROOT_DIR}" ls-files | rg -q '(^|/)(\.secrets|terraform\.tfstate|vault-init)|\.hclic$|\.(key|pem)$'; then
   die "A sensitive or generated file appears to be tracked by Git."
