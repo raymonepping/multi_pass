@@ -5,13 +5,13 @@
 Every script is designed to be rerun. If execution stops, fix the reported
 gate and rerun its Make target. In particular:
 
-- Missing license: export `VAULT_LICENSE_FILE` and resume with `make license`.
+- Missing license: place the raw `.hclic` file at `.secrets/keys/vault.hclic`
+  (default) or export `VAULT_LICENSE_FILE` pointing to another path, then rerun
+  `make license`.
 - License parse error `expected integer`: the selected file is not a raw
-  HashiCorp license (often a placeholder while `VAULT_LICENSE` is supplied
-  elsewhere). Unset `VAULT_LICENSE_FILE`, point `VAULT_LICENSE_ENV_FILE` at an
-  ignored environment file containing `VAULT_LICENSE=`, and rerun
-  `make license`. The value is extracted into a temporary mode-`0600` file and
-  never printed.
+  HashiCorp license (often a placeholder). Point `VAULT_LICENSE_ENV_FILE` at an
+  ignored environment file containing `VAULT_LICENSE=` and rerun `make license`.
+  The value is extracted into a temporary mode-`0600` file and never printed.
 - Missing `firewalld`: export `RHSM_ORG` and `RHSM_ACTIVATION_KEY`, then run
   `make rhel-prepare`. Alternatively, replace/rebuild the source qcow2 with
   `firewalld` preinstalled. Do not proceed by disabling the firewall gate or
@@ -35,7 +35,7 @@ gate and rerun its Make target. In particular:
 
 This test is deliberately not automated because it changes live cluster state.
 
-1. Run `make validate` and note the node whose `ha_mode` is `active`.
+1. Run `make validate` and note the node whose `ha_role` is `active`.
 2. Stop Vault only on that node:
 
    ```sh
