@@ -1,0 +1,21 @@
+namespaces = ["engineering", "operations"]
+
+# Do not place secret values in this file. This layer owns configuration only.
+mounts = {
+  engineering_kv = {
+    namespace = "engineering"
+    path      = "kv"
+    type      = "kv"
+    options   = { version = "2" }
+  }
+  engineering_transit = {
+    namespace = "engineering"
+    path      = "transit"
+    type      = "transit"
+  }
+  operations_pki = {
+    namespace = "operations"
+    path      = "pki"
+    type      = "pki"
+  }
+}

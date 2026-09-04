@@ -1,0 +1,9 @@
+#cloud-config
+
+# Multipass injects Ubuntu-specific vendor-data that installs pollinate.
+# RHEL does not provide it, so mark only that module complete before final stage.
+bootcmd:
+  - [touch, /var/lib/cloud/instance/sem/config_package_update_upgrade_install]
+
+package_update: false
+package_upgrade: false
