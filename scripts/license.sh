@@ -24,7 +24,7 @@ configured_license_inputs=0
 [[ -n "${VAULT_LICENSE_FILE:-}" ]] && configured_license_inputs=$((configured_license_inputs + 1))
 [[ -n "${VAULT_LICENSE_ENV_FILE:-}" ]] && configured_license_inputs=$((configured_license_inputs + 1))
 [[ -n "${VAULT_LICENSE:-}" ]] && configured_license_inputs=$((configured_license_inputs + 1))
-[[ ${configured_license_inputs} -eq 1 ]] || \
+[[ ${configured_license_inputs} -eq 1 ]] ||
   die "Configure exactly one of VAULT_LICENSE_FILE, VAULT_LICENSE_ENV_FILE, or VAULT_LICENSE."
 
 if [[ -n "${VAULT_LICENSE_FILE:-}" ]]; then
@@ -50,16 +50,16 @@ else
         exit
       }
       END { if (!found) exit 1 }
-    ' "${VAULT_LICENSE_ENV_FILE}" > "${temporary_local_license}" || \
+    ' "${VAULT_LICENSE_ENV_FILE}" >"${temporary_local_license}" ||
       die "VAULT_LICENSE is absent from ${VAULT_LICENSE_ENV_FILE}."
   else
-    printf '%s\n' "${VAULT_LICENSE}" > "${temporary_local_license}"
+    printf '%s\n' "${VAULT_LICENSE}" >"${temporary_local_license}"
   fi
   license_source="${temporary_local_license}"
 fi
 
 license_prefix="$(LC_ALL=C head -c 2 "${license_source}")"
-[[ "${license_prefix}" =~ ^0[0-9]$ ]] || \
+[[ "${license_prefix}" =~ ^0[0-9]$ ]] ||
   die "The selected input is not a raw HashiCorp license. Expected a version prefix such as 02; check for a placeholder, wrapper, or altered file."
 
 for node in "${NODES[@]}"; do

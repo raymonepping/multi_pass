@@ -14,7 +14,7 @@ require_managed_nodes
 for node in "${NODES[@]}"; do
   prerequisites_ready="$(multipass exec "${node}" -- sh -c \
     'if test -x /usr/local/bin/vault && sudo test -r /opt/vault/vault.hclic; then printf yes; else printf no; fi')"
-  [[ "${prerequisites_ready}" == "yes" ]] || \
+  [[ "${prerequisites_ready}" == "yes" ]] ||
     die "Vault or its license is absent on ${node}. Run 'make install' and 'make license' first."
 done
 
