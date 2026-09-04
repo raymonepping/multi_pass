@@ -98,11 +98,6 @@ double-initialisation and skip work that is already complete.
   ```sh
   make ansible-deps
   ```
-- **`cloud.terraform` fails with `get_bin_path`:** this incompatibility with
-  Ansible Core 2.21 is why the workflow uses Terraform's typed output and an
-  in-memory inventory. Do not restore the state inventory plugin unless a
-  compatible release passes the first-run proof.
-
 ### Terraform platform layer
 
 - **Permission denied on mounts:** the `lab-platform-admin` policy must cover
@@ -186,12 +181,14 @@ protected Red Hat content, updates, and security patches. The unregister target
 is restricted to the three VM names resolved from the infrastructure state and
 skips guests that have no registered identity.
 
-After `make destroy`, reset both Terraform state files before reprovisioning:
+After `make destroy`, reset the platform and Ansible orchestration state files
+before reprovisioning:
 
 ```sh
 rm -f terraform/platform/terraform.tfstate terraform/platform/terraform.tfstate.backup
+rm -f terraform/ansible/terraform.tfstate terraform/ansible/terraform.tfstate.backup
 ```
 
-The Ansible roles are stateless — no cleanup needed. On the next
-`ansible-playbook` run after `make infra`, the dynamic inventory will
-automatically pick up the new node IPs from `terraform output`.
+The Ansible roles are stateless — no cleanup needed. On the next `make lab`
+run, `terraform/infra` writes fresh IP addresses into state, `terraform/ansible`
+reads them, and Ansible converges the new nodes.

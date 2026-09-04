@@ -31,14 +31,9 @@ cluster healthy.
 | Platform | `terraform/platform` | Vault namespaces and secret-engine mounts |
 
 `terraform/ansible` reads `ansible_nodes` from deployment state and passes the
-JSON node model to `ansible_playbook`. `ansible/terraform.yml` creates the
-inventory in memory before importing the convergence playbook. This works on
-the first run and avoids depending on an inventory plugin reading state before
-new resources have been persisted.
-
-The `cloud.terraform.terraform_provider` inventory plugin was tested but is not
-used: version 4.0.0 is incompatible with the installed Ansible Core 2.21, and
-the state-backed approach also has a documented first-apply timing limitation.
+node topology as a typed JSON `extra_var` to `ansible_playbook`.
+`ansible/terraform.yml` builds the inventory in memory before importing the
+convergence playbook — no inventory file, no first-apply timing problem.
 
 ## Prerequisites
 
@@ -137,6 +132,7 @@ Every task that handles credentials uses `no_log: true`, and
 
 ## Documentation
 
+- [Architecture](docs/architecture.md) — complete layer overview, data flow, and design decisions
 - [Ansible workflow](docs/ansible-getting-started.md)
 - [Terraform roots](docs/terraform-getting-started.md)
 - [Operations and recovery](docs/operations.md)

@@ -11,16 +11,10 @@ resource reads the non-secret `ansible_nodes` output from `terraform/infra`,
 runs `ansible/terraform.yml`, waits for completion, and fails Terraform when a
 playbook task fails.
 
-## Why inventory is created in memory
+## How inventory is created
 
-The Ansible provider's `ansible_playbook` resource creates a basic temporary
-inventory and does not automatically consume separate `ansible_host` and
-`ansible_group` resources. The `cloud.terraform` state inventory plugin can
-bridge those resources only after state is current. Its 4.0.0 release also
-fails under this machine's Ansible Core 2.21 because it calls a removed
-`get_bin_path` argument.
-
-`terraform/ansible` therefore passes this shape directly from deployment state:
+`terraform/ansible` passes this shape directly from deployment state to the
+`ansible_playbook` resource as a JSON `extra_var`:
 
 ```json
 {
@@ -30,9 +24,10 @@ fails under this machine's Ansible Core 2.21 because it calls a removed
 }
 ```
 
-The first play uses `add_host` to create the `vault` group in memory. The
-second play performs convergence. This has no first-apply state race and does
-not write a generated inventory containing secrets.
+The first play in `ansible/terraform.yml` uses `add_host` to create the `vault`
+group in memory. The second play runs convergence. No inventory file is
+written; no first-apply timing race exists because the `ansible` root runs only
+after `terraform/infra` has finished.
 
 ## Dependencies and SSH
 
