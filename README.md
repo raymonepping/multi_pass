@@ -12,6 +12,37 @@ Shell scripts         →  TLS, Vault binary, license, config, init, unseal
 Terraform (platform)  →  namespaces, secret engine mounts, auth, policies
 ```
 
+The project is structured as three distinct phases with clear handoff points
+between them:
+
+| Phase | Tool | Owns |
+|---|---|---|
+| 1 — Infrastructure | Terraform (`terraform/infra/`) | VMs exist and are reachable |
+| 2 — OS & bootstrap | Shell scripts (`scripts/`) | Binary, TLS, config, init, unseal |
+| 3 — Vault config | Terraform (`terraform/platform/`) | Everything inside Vault |
+
+### Lab vs production: where Ansible belongs
+
+The shell scripts in Phase 2 are **intentionally kept simple for a local lab**.
+They use `multipass exec` and `multipass transfer` to reach the guests and are
+designed to be readable, auditable, and easy to step through when learning.
+
+In a **production or team environment**, Phase 2 is the natural home for
+**Ansible**. The shell scripts map directly to Ansible equivalents:
+
+| Script | Ansible replacement |
+|---|---|
+| `tls.sh` | `openssl` tasks + `copy` module |
+| `install.sh` | `get_url` + `unarchive` + `systemd` module |
+| `license.sh` | `copy` module with `mode: '0640'` |
+| `configure.sh` | `template` module + `systemd` module |
+| `bootstrap.sh` | `command` module (`vault operator init/unseal`) + `fetch` |
+
+The Terraform phases (1 and 3) stay exactly the same regardless of what
+replaces the scripts in Phase 2 — Ansible or otherwise. The only thing that
+changes is how the guests are configured and how Vault is bootstrapped.
+Terraform still owns VM lifecycle and all ongoing Vault configuration.
+
 ## Prerequisites
 
 | Tool | Purpose |
