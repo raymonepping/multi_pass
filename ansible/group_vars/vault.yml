@@ -1,0 +1,33 @@
+---
+# Vault Enterprise version — keep in sync with scripts/common.sh VAULT_VERSION
+vault_version: "2.1.0+ent"
+vault_archive_sha256: "a0fbfb3fb07e5c4574f07062338f8fb10b4464c0622e3cc9b3b030d3c9afc2da"
+vault_arch: "linux_arm64"
+
+# Paths on the managed nodes
+vault_bin: /usr/local/bin/vault
+vault_config_dir: /etc/vault.d
+vault_config_file: /etc/vault.d/vault.hcl
+vault_data_dir: /opt/vault/data
+vault_tls_dir: /opt/vault/tls
+vault_license_dest: /opt/vault/vault.hclic
+vault_service_file: /etc/systemd/system/vault.service
+
+# Ports opened in firewalld
+vault_api_port: 8200
+vault_cluster_port: 8201
+
+# Local paths on the control machine (relative to the repo root)
+# Resolved to absolute in roles that need them.
+secrets_dir: "{{ playbook_dir }}/../.secrets"
+tls_dir: "{{ playbook_dir }}/../.secrets/tls"
+keys_dir: "{{ playbook_dir }}/../.secrets/keys"
+cache_dir: "{{ playbook_dir }}/../.cache"
+templates_dir: "{{ playbook_dir }}/../templates/vault"
+
+# Vault init settings
+key_shares: 3
+key_threshold: 2
+
+# Raft leader — used by followers when joining the cluster
+vault_leader: vault-1

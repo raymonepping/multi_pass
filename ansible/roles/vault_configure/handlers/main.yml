@@ -1,0 +1,11 @@
+---
+# ansible/roles/vault_configure/handlers/main.yml
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart vault
+  ansible.builtin.systemd:
+    name: vault
+    state: restarted

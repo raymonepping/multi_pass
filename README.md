@@ -1,47 +1,56 @@
 # multi_pass
 
-> **New to Vault?** See [docs/vault-getting-started.md](docs/vault-getting-started.md) for a hands-on walkthrough: shell setup, reading and writing secrets, Transit encryption, PKI, policies, and more.
+## Documentation
 
-A fully automated lab for running a three-node HashiCorp Vault Enterprise cluster on local RHEL 9 VMs using [Multipass](https://multipass.run). Infrastructure is provisioned with Terraform, the OS and Vault bootstrap layer is driven by shell scripts, and ongoing Vault configuration is managed as code through the Vault Terraform provider.
+| Guide | What it covers |
+|---|---|
+| [Vault — Getting Started](docs/vault-getting-started.md) | Shell setup, KV v2, Transit, PKI, policies, tokens, unseal |
+| [Shell Scripts — Getting Started](docs/shell-getting-started.md) | Each script explained, Make targets, overrides, resume after failure |
+| [Ansible — Getting Started](docs/ansible-getting-started.md) | Playbook usage, tags, dry-run, role reference, extending |
+| [Terraform — Getting Started](docs/terraform-getting-started.md) | Infra layer, platform layer, variables, drift detection, state commands |
+| [Operations](docs/operations.md) | Resume points, failover test, day-2 changes, teardown |
+| [Release Checklist](docs/release-checklist.md) | Pre-tag gates, tagging, post-release steps |
+
+A fully automated lab for running a three-node HashiCorp Vault Enterprise cluster on local RHEL 9 VMs using [Multipass](https://multipass.run). Infrastructure is provisioned with Terraform, the OS and Vault bootstrap layer is driven by shell scripts or Ansible, and ongoing Vault configuration is managed as code through the Vault Terraform provider.
 
 ## Architecture
 
 ```
 Terraform (infra)     →  three RHEL 9 Multipass VMs
-Shell scripts         →  TLS, Vault binary, license, config, init, unseal
+Shell scripts/Ansible →  TLS, Vault binary, license, config, init, unseal
 Terraform (platform)  →  namespaces, secret engine mounts, auth, policies
 ```
 
-The project is structured as three distinct phases with clear handoff points
-between them:
+The project is structured as three distinct phases with clear handoff points between them:
 
 | Phase | Tool | Owns |
 |---|---|---|
 | 1 — Infrastructure | Terraform (`terraform/infra/`) | VMs exist and are reachable |
-| 2 — OS & bootstrap | Shell scripts (`scripts/`) | Binary, TLS, config, init, unseal |
+| 2 — OS & bootstrap | Shell scripts **or** Ansible (`ansible/`) | Binary, TLS, config, init, unseal |
 | 3 — Vault config | Terraform (`terraform/platform/`) | Everything inside Vault |
 
-### Lab vs production: where Ansible belongs
+### Lab vs production: shell scripts or Ansible
 
-The shell scripts in Phase 2 are **intentionally kept simple for a local lab**.
-They use `multipass exec` and `multipass transfer` to reach the guests and are
-designed to be readable, auditable, and easy to step through when learning.
+Phase 2 ships with **two implementations** — use whichever fits your workflow:
 
-In a **production or team environment**, Phase 2 is the natural home for
-**Ansible**. The shell scripts map directly to Ansible equivalents:
+| | Shell scripts (`scripts/`) | Ansible (`ansible/`) |
+|---|---|---|
+| Entry point | `make tls install license configure bootstrap` | `ansible-playbook ansible/site.yml` |
+| Transport | `multipass exec` / `multipass transfer` | Direct SSH |
+| Best for | Learning, stepping through individual stages | Repeated rebuilds, team use, moving to real hosts |
+| Idempotent | Yes | Yes |
 
-| Script | Ansible replacement |
+The Terraform phases (1 and 3) are identical regardless of which Phase 2 path you use.
+
+| Script | Ansible role equivalent |
 |---|---|
-| `tls.sh` | `openssl` tasks + `copy` module |
-| `install.sh` | `get_url` + `unarchive` + `systemd` module |
-| `license.sh` | `copy` module with `mode: '0640'` |
-| `configure.sh` | `template` module + `systemd` module |
-| `bootstrap.sh` | `command` module (`vault operator init/unseal`) + `fetch` |
+| `tls.sh` | `roles/tls` |
+| `install.sh` | `roles/vault_install` |
+| `license.sh` | `roles/vault_license` |
+| `configure.sh` | `roles/vault_configure` |
+| `bootstrap.sh` | `roles/vault_bootstrap` |
 
-The Terraform phases (1 and 3) stay exactly the same regardless of what
-replaces the scripts in Phase 2 — Ansible or otherwise. The only thing that
-changes is how the guests are configured and how Vault is bootstrapped.
-Terraform still owns VM lifecycle and all ongoing Vault configuration.
+---
 
 ## Prerequisites
 
@@ -50,7 +59,9 @@ Terraform still owns VM lifecycle and all ongoing Vault configuration.
 | `terraform` >= 1.11 | Infrastructure and Vault configuration |
 | `multipass` | Local VM management |
 | `vault` (CLI) | Bootstrap and validation |
-| `jq`, `openssl`, `curl`, `unzip`, `shasum` | Script dependencies |
+| `jq`, `openssl`, `curl`, `unzip`, `shasum` | Shell script dependencies |
+| `ansible` >= 2.15 | Ansible path only — `brew install ansible` |
+| `python3` | Required by the dynamic inventory script |
 
 A RHEL 9 ARM64 qcow2 image is required at `/Users/Shared/rhel-9.8-aarch64-kvm.qcow2` (override with `TF_VAR_image_path`).
 
@@ -61,7 +72,9 @@ Place your licenses at:
 .secrets/keys/terraform.hclic
 ```
 
-## Full runbook
+---
+
+## Full runbook — shell scripts path
 
 ```bash
 make check             # verify tools, image, and licenses
@@ -78,6 +91,34 @@ make platform-validate # confirm Terraform plan is clean (no drift)
 
 Each target is idempotent and can be rerun after fixing a reported error.
 
+## Full runbook — Ansible path
+
+```bash
+make check             # verify tools, image, and licenses
+make infra             # create vault-1, vault-2, vault-3 VMs (Terraform)
+
+# Phase 2 — replace the five shell script steps with one playbook
+ansible-playbook ansible/site.yml
+
+# Or run individual phases via tags
+ansible-playbook ansible/site.yml --tags tls
+ansible-playbook ansible/site.yml --tags install
+ansible-playbook ansible/site.yml --tags license
+ansible-playbook ansible/site.yml --tags configure
+ansible-playbook ansible/site.yml --tags bootstrap
+
+make validate          # cluster health check (uses vault CLI, same for both paths)
+make platform          # apply Terraform platform layer
+make platform-validate # drift check
+```
+
+> **Note:** the Ansible path requires your SSH public key to be present in
+> `terraform/infra/cloud-init/rhel.yaml` under `ssh_authorized_keys`. This is
+> already configured for the current setup. On a fresh clone, replace the key
+> value with your own `~/.ssh/id_ed25519.pub` before running `make infra`.
+
+---
+
 ## Make targets
 
 | Target | Description |
@@ -88,17 +129,45 @@ Each target is idempotent and can be rerun after fixing a reported error.
 | `rhel-prepare` | Register RHEL nodes with RHSM and install `firewalld` |
 | `rhel-unregister` | Unregister nodes from RHSM before destroy |
 | `infra-validate` | Verify Terraform state and VM reachability |
-| `tls` | Generate and distribute TLS material |
-| `install` | Install Vault Enterprise binary |
-| `license` | Push Vault license to all nodes |
-| `configure` | Write Vault config and start the service |
-| `bootstrap` | Initialize, join Raft, unseal, create platform token |
+| `tls` | Generate and distribute TLS material (shell path) |
+| `install` | Install Vault Enterprise binary (shell path) |
+| `license` | Push Vault license to all nodes (shell path) |
+| `configure` | Write Vault config and start the service (shell path) |
+| `bootstrap` | Initialize, join Raft, unseal, create platform token (shell path) |
 | `validate` | Live cluster health check |
 | `platform-plan` | Terraform plan for Vault configuration |
 | `platform` | Apply Vault configuration |
 | `platform-validate` | Drift detection for Vault configuration |
 | `failover-help` | Print the manual failover acceptance test |
 | `destroy` | Destroy VMs (Terraform interactive confirm) |
+
+---
+
+## Ansible layout
+
+```
+ansible/
+├── ansible.cfg                    # inventory, ssh_args, interpreter defaults
+├── site.yml                       # top-level playbook (all roles, tagged)
+├── inventory/
+│   └── terraform.py               # dynamic inventory from terraform output
+├── group_vars/
+│   └── vault.yml                  # version, paths, ports, secrets locations
+└── roles/
+    ├── tls/                       # generate CA + certs locally, push to nodes
+    ├── vault_install/             # binary, user, dirs, firewall, swap
+    ├── vault_license/             # push .hclic (no_log throughout)
+    ├── vault_configure/           # vault.hcl template, systemd unit, /etc/hosts
+    └── vault_bootstrap/           # init, raft join, unseal, policy, token
+```
+
+Check connectivity at any time:
+
+```bash
+ansible vault -m ping --private-key ~/.ssh/id_ed25519 -u ubuntu
+```
+
+---
 
 ## Secrets layout
 
@@ -107,20 +176,24 @@ Each target is idempotent and can be rerun after fixing a reported error.
 ├── keys/
 │   ├── vault.hclic    # Vault Enterprise license
 │   └── terraform.hclic
-├── tls/               # CA and per-node certs
+├── tls/               # CA and per-node certs (generated locally)
 ├── vault-init.json    # root token + unseal keys — back this up
 └── platform-token     # scoped Terraform token
 ```
+
+---
 
 ## Override reference
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `TF_VAR_image_path` | `/Users/Shared/rhel-9.8-aarch64-kvm.qcow2` | RHEL qcow2 image |
-| `VAULT_LICENSE_FILE` | `.secrets/keys/vault.hclic` | Vault license path |
+| `VAULT_LICENSE_FILE` | `.secrets/keys/vault.hclic` | Vault license path (shell + Ansible) |
 | `TF_LICENSE_PATH` | `.secrets/keys/terraform.hclic` | Terraform license path |
 | `VAULT_VERSION` | `2.1.0+ent` | Vault Enterprise version to install |
 | `RHSM_ORG` + `RHSM_ACTIVATION_KEY` | — | Required only for `make rhel-prepare` |
+
+---
 
 ## License
 

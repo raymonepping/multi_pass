@@ -4,6 +4,8 @@
 
 - [ ] All changes merged to `main` and CI checks green
 - [ ] `make check` passes locally
+- [ ] Ansible connectivity verified: `ansible vault -m ping --private-key ~/.ssh/id_ed25519 -u ubuntu`
+- [ ] Ansible dry-run clean: `ansible-playbook ansible/site.yml --check --diff`
 - [ ] CHANGELOG.md updated — move items from `[Unreleased]` to a new version
       section following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
       format (e.g. `## [1.2.0] - 2026-09-04`)

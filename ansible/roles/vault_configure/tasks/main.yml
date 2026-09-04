@@ -1,0 +1,75 @@
+---
+# ansible/roles/vault_configure/tasks/main.yml
+# Mirrors scripts/configure.sh — writes vault.hcl and the systemd unit,
+# updates /etc/hosts for peer resolution, and starts the service.
+
+- name: Verify TLS CA is present on node
+  ansible.builtin.stat:
+    path: "{{ vault_tls_dir }}/ca.crt"
+  register: tls_ca
+
+- name: Abort if TLS material is absent
+  ansible.builtin.fail:
+    msg: "TLS CA is absent on {{ inventory_hostname }}. Run the tls role first."
+  when: not tls_ca.stat.exists
+
+- name: Verify Vault license is present on node
+  ansible.builtin.stat:
+    path: "{{ vault_license_dest }}"
+  register: license_file
+
+- name: Abort if license is absent
+  ansible.builtin.fail:
+    msg: "Vault license is absent on {{ inventory_hostname }}. Run the vault_license role first."
+  when: not license_file.stat.exists
+
+# ── /etc/hosts peer entries ───────────────────────────────────────────────────
+
+- name: Remove stale vault-lab host entries
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '# vault-lab$'
+    state: absent
+
+- name: Add vault-lab peer entries to /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ hostvars[item].ansible_host }} {{ item }} # vault-lab"
+    regexp: "^[0-9.]+ {{ item }} # vault-lab$"
+    state: present
+  loop: "{{ groups['vault'] }}"
+
+# ── Vault configuration ───────────────────────────────────────────────────────
+
+- name: Write vault.hcl from template
+  ansible.builtin.template:
+    src: vault.hcl.j2
+    dest: "{{ vault_config_file }}"
+    owner: root
+    group: vault
+    mode: "0640"
+  notify: Restart vault
+
+- name: Install vault systemd service unit
+  ansible.builtin.copy:
+    src: "{{ templates_dir }}/vault.service"
+    dest: "{{ vault_service_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart vault
+
+- name: Enable and start Vault service
+  ansible.builtin.systemd:
+    name: vault
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Confirm Vault service is active
+  ansible.builtin.systemd:
+    name: vault
+  register: vault_service_state
+  failed_when: vault_service_state.status.ActiveState != 'active'

@@ -1,0 +1,113 @@
+---
+# ansible/roles/vault_install/tasks/main.yml
+# Mirrors scripts/install.sh + scripts/install-vault-guest.sh
+# Downloads the Vault Enterprise binary once to .cache/, verifies the
+# checksum, and installs it on every node.
+
+- name: Ensure local cache directory exists
+  ansible.builtin.file:
+    path: "{{ cache_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Set archive filename
+  ansible.builtin.set_fact:
+    vault_archive: "vault_{{ vault_version }}_{{ vault_arch }}.zip"
+  run_once: true
+
+- name: Download Vault Enterprise archive
+  ansible.builtin.get_url:
+    url: "https://releases.hashicorp.com/vault/{{ vault_version }}/{{ vault_archive }}"
+    dest: "{{ cache_dir }}/{{ vault_archive }}"
+    checksum: "sha256:{{ vault_archive_sha256 }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Unpack Vault binary from archive
+  ansible.builtin.unarchive:
+    src: "{{ cache_dir }}/{{ vault_archive }}"
+    dest: "{{ cache_dir }}"
+    include:
+      - vault
+    creates: "{{ cache_dir }}/vault"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+# ── System user and directories ───────────────────────────────────────────────
+
+- name: Create vault system user
+  ansible.builtin.user:
+    name: vault
+    system: true
+    home: /etc/vault.d
+    shell: /sbin/nologin
+    create_home: false
+
+- name: Create Vault directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: vault
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ vault_config_dir }}", owner: root, mode: "0750" }
+    - { path: "{{ vault_data_dir }}",   owner: vault, mode: "0750" }
+    - { path: "{{ vault_tls_dir }}",    owner: vault, mode: "0750" }
+
+# ── Binary install ────────────────────────────────────────────────────────────
+
+- name: Install Vault binary
+  ansible.builtin.copy:
+    src: "{{ cache_dir }}/vault"
+    dest: "{{ vault_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart vault
+
+- name: Verify installed Vault version
+  ansible.builtin.command: "{{ vault_bin }} version"
+  register: installed_version
+  changed_when: false
+  failed_when: vault_version not in installed_version.stdout
+
+# ── Firewall ──────────────────────────────────────────────────────────────────
+
+- name: Ensure firewalld is running
+  ansible.builtin.systemd:
+    name: firewalld
+    state: started
+    enabled: true
+
+- name: Open Vault API port
+  ansible.posix.firewalld:
+    port: "{{ vault_api_port }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Open Vault cluster port
+  ansible.posix.firewalld:
+    port: "{{ vault_cluster_port }}/tcp"
+    permanent: true
+    state: enabled
+    immediate: true
+
+# ── Swap ──────────────────────────────────────────────────────────────────────
+
+- name: Disable swap immediately
+  ansible.builtin.command: swapoff -a
+  changed_when: false
+
+- name: Disable swap in fstab
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#].+\sswap\s.+)$'
+    replace: '# vault-lab disabled: \1'

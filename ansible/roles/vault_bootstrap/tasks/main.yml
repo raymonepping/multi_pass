@@ -1,0 +1,262 @@
+---
+# ansible/roles/vault_bootstrap/tasks/main.yml
+# Mirrors scripts/bootstrap.sh
+#
+# Secret handling rules:
+#   - no_log: true on every task that registers or uses init/unseal material
+#   - Init output is fetched to localhost only (.secrets/vault-init.json)
+#   - Unseal keys are never written to remote nodes
+#   - Platform token written to .secrets/platform-token (mode 0600)
+
+- name: Resolve secrets directory
+  ansible.builtin.set_fact:
+    _secrets_dir: "{{ secrets_dir | expanduser | realpath }}"
+    _tls_dir: "{{ tls_dir | expanduser | realpath }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Ensure local secrets directory exists
+  ansible.builtin.file:
+    path: "{{ _secrets_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+# ── Initialize vault-1 ────────────────────────────────────────────────────────
+
+- name: Check vault-1 initialization status
+  ansible.builtin.uri:
+    url: "https://{{ hostvars[vault_leader].ansible_host }}:8200/v1/sys/init"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: GET
+    return_content: true
+    status_code: 200
+  register: init_status
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Initialize vault-1 (first time only)
+  ansible.builtin.uri:
+    url: "https://{{ hostvars[vault_leader].ansible_host }}:8200/v1/sys/init"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: PUT
+    body_format: json
+    body:
+      secret_shares: "{{ key_shares }}"
+      secret_threshold: "{{ key_threshold }}"
+    return_content: true
+    status_code: 200
+  register: vault_init_result
+  no_log: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: not init_status.json.initialized
+
+- name: Write init material to local secrets file
+  ansible.builtin.copy:
+    content: "{{ vault_init_result.json | to_nice_json }}"
+    dest: "{{ _secrets_dir }}/vault-init.json"
+    mode: "0600"
+  no_log: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: not init_status.json.initialized
+
+- name: Load existing init material
+  ansible.builtin.slurp:
+    src: "{{ _secrets_dir }}/vault-init.json"
+  register: init_file_raw
+  no_log: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Parse init material
+  ansible.builtin.set_fact:
+    vault_init: "{{ init_file_raw.content | b64decode | from_json }}"
+  no_log: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+# ── Unseal helper (used for each node) ────────────────────────────────────────
+
+- name: Check seal status of {{ inventory_hostname }}
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:8200/v1/sys/seal-status"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: GET
+    return_content: true
+    status_code: 200
+  register: seal_status
+  delegate_to: localhost
+  become: false
+
+- name: Wait for TLS certificate to be valid on {{ inventory_hostname }}
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:8200/v1/sys/seal-status"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: GET
+    status_code: 200
+  register: tls_check
+  until: tls_check.status == 200
+  retries: 30
+  delay: 2
+  delegate_to: localhost
+  become: false
+  when: seal_status.json.sealed
+
+- name: Submit unseal key 0 to {{ inventory_hostname }}
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:8200/v1/sys/unseal"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: PUT
+    body_format: json
+    body:
+      key: "{{ vault_init.unseal_keys_b64[0] }}"
+    status_code: 200
+  no_log: true
+  delegate_to: localhost
+  become: false
+  when: seal_status.json.sealed
+
+- name: Submit unseal key 1 to {{ inventory_hostname }}
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:8200/v1/sys/unseal"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: PUT
+    body_format: json
+    body:
+      key: "{{ vault_init.unseal_keys_b64[1] }}"
+    status_code: 200
+  no_log: true
+  delegate_to: localhost
+  become: false
+  when: seal_status.json.sealed
+
+- name: Confirm {{ inventory_hostname }} is unsealed
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:8200/v1/sys/seal-status"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: GET
+    return_content: true
+    status_code: 200
+  register: final_seal_check
+  until: not final_seal_check.json.sealed
+  retries: 6
+  delay: 5
+  delegate_to: localhost
+  become: false
+  failed_when: final_seal_check.json.sealed
+
+# ── Raft join for followers ───────────────────────────────────────────────────
+
+- name: Join {{ inventory_hostname }} to Raft cluster
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:8200/v1/sys/storage/raft/join"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: PUT
+    body_format: json
+    body:
+      leader_api_addr: "https://{{ hostvars[vault_leader].ansible_host }}:8200"
+      leader_ca_cert: "{{ lookup('file', _tls_dir + '/ca.crt') }}"
+    status_code: [200, 204]
+  delegate_to: localhost
+  become: false
+  when:
+    - inventory_hostname != vault_leader
+    - not seal_status.json.initialized | default(false)
+
+# ── Platform policy and token ─────────────────────────────────────────────────
+
+- name: Upload lab-platform-admin policy
+  ansible.builtin.uri:
+    url: "https://{{ hostvars[vault_leader].ansible_host }}:8200/v1/sys/policies/acl/lab-platform-admin"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: PUT
+    headers:
+      X-Vault-Token: "{{ vault_init.root_token }}"
+    body_format: json
+    body:
+      policy: "{{ lookup('file', playbook_dir + '/../policies/platform-admin.hcl') }}"
+    status_code: 204
+  no_log: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Check existing platform token validity
+  ansible.builtin.uri:
+    url: "https://{{ hostvars[vault_leader].ansible_host }}:8200/v1/auth/token/lookup-self"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ lookup('file', _secrets_dir + '/platform-token') | default('') }}"
+    status_code: [200, 403]
+  register: token_check
+  no_log: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+  ignore_errors: true
+  when: (_secrets_dir + '/platform-token') is file
+
+- name: Create platform token
+  ansible.builtin.uri:
+    url: "https://{{ hostvars[vault_leader].ansible_host }}:8200/v1/auth/token/create"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: PUT
+    headers:
+      X-Vault-Token: "{{ vault_init.root_token }}"
+    body_format: json
+    body:
+      policies: ["lab-platform-admin"]
+      period: "24h"
+      no_parent: true
+      display_name: "lab-platform-admin"
+    return_content: true
+    status_code: 200
+  register: platform_token_result
+  no_log: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: >
+    token_check is skipped
+    or token_check.status | default(403) == 403
+
+- name: Write platform token to local secrets file
+  ansible.builtin.copy:
+    content: "{{ platform_token_result.json.auth.client_token }}"
+    dest: "{{ _secrets_dir }}/platform-token"
+    mode: "0600"
+  no_log: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: platform_token_result is not skipped
+
+# ── Final Raft peer count check ───────────────────────────────────────────────
+
+- name: Verify three Raft voters
+  ansible.builtin.uri:
+    url: "https://{{ hostvars[vault_leader].ansible_host }}:8200/v1/sys/storage/raft/configuration"
+    ca_path: "{{ _tls_dir }}/ca.crt"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ vault_init.root_token }}"
+    return_content: true
+    status_code: 200
+  register: raft_config
+  no_log: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+  failed_when: >
+    (raft_config.json.data.config.servers | selectattr('voter', 'equalto', true) | list | length) != 3

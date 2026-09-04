@@ -2,9 +2,10 @@
 
 ## Resume points
 
-Every script is idempotent and safe to rerun. If execution stops at any step,
-fix the reported error and rerun that Make target. Guards at the top of each
-script prevent double-initialisation and skip work that is already complete.
+Every script and every Ansible role is idempotent and safe to rerun. If
+execution stops at any step, fix the reported error and rerun that Make target
+or playbook tag. Guards at the start of each script and role prevent
+double-initialisation and skip work that is already complete.
 
 ### Infrastructure
 
@@ -23,27 +24,32 @@ script prevent double-initialisation and skip work that is already complete.
 
 ### TLS
 
-- **Missing or expired CA:** delete `.secrets/tls/` and rerun `make tls`. A
-  new 10-year CA and fresh node certificates will be generated.
-- **Changed VM IP:** rerun `make tls configure`. Node certificates are
-  regenerated only when the current IP SAN is absent from the existing cert,
-  so unchanged nodes are skipped. `configure` must follow to push the new
-  material to the guests and restart the service.
+- **Missing or expired CA:** delete `.secrets/tls/` and rerun `make tls` or
+  `ansible-playbook ansible/site.yml --tags tls`. A new 10-year CA and fresh
+  node certificates will be generated.
+- **Changed VM IP:** rerun `make tls configure` (shell path) or
+  `ansible-playbook ansible/site.yml --tags tls,configure` (Ansible path).
+  Node certificates are regenerated only when the current IP SAN is absent from
+  the existing cert, so unchanged nodes are skipped. The configure step must
+  follow to push the new material to the guests and restart the service.
 
 ### Vault binary and license
 
-- **Binary absent on a node:** rerun `make install`. It is idempotent and
-  skips nodes where the correct version is already installed.
+- **Binary absent on a node:** rerun `make install` or
+  `ansible-playbook ansible/site.yml --tags install`. Idempotent — skips nodes
+  where the correct version is already present.
 - **Missing Vault license:** place the raw `.hclic` file at
   `.secrets/keys/vault.hclic` (default) or export `VAULT_LICENSE_FILE`
-  pointing to another path, then rerun `make license`.
+  pointing to another path, then rerun `make license` or
+  `ansible-playbook ansible/site.yml --tags license`.
 - **License parse error (`expected integer`):** the selected file is not a raw
   HashiCorp license (often a placeholder or env-wrapped value). Point
   `VAULT_LICENSE_ENV_FILE` at an ignored environment file containing
   `VAULT_LICENSE=` and rerun `make license`. The value is extracted into a
-  temporary mode-`0600` file and never printed.
+  temporary mode-`0600` file and never printed. (Shell path only — the Ansible
+  role reads the raw file directly.)
 - **Expired/invalid license:** replace `.secrets/keys/vault.hclic` and rerun
-  `make license configure`.
+  `make license configure` or `ansible-playbook ansible/site.yml --tags license,configure`.
 
 ### Vault bootstrap
 
@@ -57,14 +63,39 @@ script prevent double-initialisation and skip work that is already complete.
   VAULT_ADDR="https://<node-ip>:8200" vault operator unseal "${KEY1}"
   ```
 
-  The scripts never auto-unseal on boot because this lab uses Shamir seal.
+  The cluster never auto-unseals on boot because this lab uses Shamir seal.
   Never paste keys into shell history on a shared machine.
 
 - **Lost `.secrets/vault-init.json`:** do not reinitialise or destroy the
   cluster. Restore the file from your secure backup — it is the only copy of
   the root token and unseal keys.
-- **Expired platform token:** rerun `make bootstrap`. The script detects that
-  the existing token is invalid and creates a new one.
+- **Expired platform token:** rerun `make bootstrap` (shell path) or
+  `ansible-playbook ansible/site.yml --tags bootstrap` (Ansible path). Both
+  detect that the existing token is invalid and create a new one.
+
+### Ansible-specific
+
+- **SSH connection refused:** confirm your public key is in
+  `terraform/infra/cloud-init/rhel.yaml` under `ssh_authorized_keys` and that
+  the VMs were created after that key was added. For existing VMs, inject the
+  key manually:
+  ```sh
+  multipass exec <node> -- bash -c \
+    "echo '$(cat ~/.ssh/id_ed25519.pub)' >> /home/ubuntu/.ssh/authorized_keys"
+  ```
+- **`sudo: a password is required` on a `delegate_to: localhost` task:** the
+  play-level `become: true` is inherited by local tasks. All `delegate_to:
+  localhost` tasks in the roles already carry `become: false` to prevent this.
+  If you see it after modifying a role, add `become: false` to the affected task.
+- **`UseKeychain` SSH error:** Ansible's bundled SSH does not understand the
+  macOS `UseKeychain` directive. `ansible.cfg` already sets
+  `ssh_args = -F /dev/null` to bypass `~/.ssh/config`. If you see this error,
+  confirm `ansible.cfg` is being picked up (`ansible --version` should show
+  the config file path).
+- **`community.crypto` module not found:** install the collection:
+  ```sh
+  ansible-galaxy collection install community.crypto ansible.posix
+  ```
 
 ### Terraform platform layer
 
@@ -149,9 +180,12 @@ protected Red Hat content, updates, and security patches. The unregister target
 is restricted to the three VM names resolved from the infrastructure state and
 skips guests that have no registered identity.
 
-After `make destroy`, the Terraform platform state (`terraform/platform/`) still
-references resources that no longer exist. Reset it before reprovisioning:
+After `make destroy`, reset both Terraform state files before reprovisioning:
 
 ```sh
 rm -f terraform/platform/terraform.tfstate terraform/platform/terraform.tfstate.backup
 ```
+
+The Ansible roles are stateless — no cleanup needed. On the next
+`ansible-playbook` run after `make infra`, the dynamic inventory will
+automatically pick up the new node IPs from `terraform output`.

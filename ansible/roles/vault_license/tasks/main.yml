@@ -1,0 +1,56 @@
+---
+# ansible/roles/vault_license/tasks/main.yml
+# Mirrors scripts/license.sh — pushes the raw .hclic to each node.
+# The license file is never logged (no_log: true on every task that touches it).
+
+- name: Resolve license file path
+  ansible.builtin.set_fact:
+    vault_license_src: "{{ lookup('env', 'VAULT_LICENSE_FILE') or (keys_dir + '/vault.hclic') }}"
+  run_once: true
+
+- name: Verify license file exists on the control machine
+  ansible.builtin.stat:
+    path: "{{ vault_license_src }}"
+  register: license_stat
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Abort if license file is missing
+  ansible.builtin.fail:
+    msg: >
+      Vault license not found at {{ vault_license_src }}.
+      Place the raw .hclic at .secrets/keys/vault.hclic or set VAULT_LICENSE_FILE.
+  when: not license_stat.stat.exists
+  run_once: true
+
+- name: Verify vault group exists on node
+  ansible.builtin.getent:
+    database: group
+    key: vault
+  register: vault_group
+
+- name: Abort if vault service account is missing
+  ansible.builtin.fail:
+    msg: "The vault group is absent on {{ inventory_hostname }}. Run the vault_install role first."
+  when: vault_group.ansible_facts.getent_group.vault is not defined
+
+- name: Push license to node (contents suppressed)
+  ansible.builtin.copy:
+    src: "{{ vault_license_src }}"
+    dest: "{{ vault_license_dest }}"
+    owner: root
+    group: vault
+    mode: "0640"
+  no_log: true
+  notify: Restart vault
+
+- name: Confirm license is in place
+  ansible.builtin.stat:
+    path: "{{ vault_license_dest }}"
+  register: installed_license
+
+- name: Abort if license was not installed
+  ansible.builtin.fail:
+    msg: "License file is absent at {{ vault_license_dest }} on {{ inventory_hostname }}."
+  when: not installed_license.stat.exists
