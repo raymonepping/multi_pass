@@ -9,8 +9,16 @@ PLATFORM_DIR="${ROOT_DIR}/terraform/platform"
 SECRETS_DIR="${ROOT_DIR}/.secrets"
 CACHE_DIR="${ROOT_DIR}/.cache"
 TLS_DIR="${SECRETS_DIR}/tls"
+KEYS_DIR="${SECRETS_DIR}/keys"
 INIT_FILE="${SECRETS_DIR}/vault-init.json"
 PLATFORM_TOKEN_FILE="${SECRETS_DIR}/platform-token"
+
+VAULT_LICENSE_FILE="${VAULT_LICENSE_FILE:-${KEYS_DIR}/vault.hclic}"
+export VAULT_LICENSE_FILE
+
+TF_LICENSE_PATH="${TF_LICENSE_PATH:-${KEYS_DIR}/terraform.hclic}"
+export TF_LICENSE_PATH
+
 NODES=(vault-1 vault-2 vault-3)
 
 VAULT_VERSION="${VAULT_VERSION:-2.1.0+ent}"

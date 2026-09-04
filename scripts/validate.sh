@@ -30,12 +30,19 @@ for node in "${NODES[@]}"; do
   [[ ${status_rc} -eq 0 ]] || die "Vault on ${node} is unavailable or sealed."
   [[ "$(jq -r '.initialized' <<<"${status}")" == "true" ]] || die "${node} is uninitialized."
   [[ "$(jq -r '.sealed' <<<"${status}")" == "false" ]] || die "${node} is sealed."
-  case "$(jq -r '.ha_mode' <<<"${status}")" in
-  active) leader_count=$((leader_count + 1)) ;;
-  standby | performance_standby) standby_count=$((standby_count + 1)) ;;
-  *) die "Unexpected HA mode on ${node}: $(jq -r '.ha_mode' <<<"${status}")" ;;
-  esac
-  jq '{initialized, sealed, version, cluster_name, ha_enabled, ha_mode}' <<<"${status}"
+  is_self="$(jq -r '.is_self // false' <<<"${status}")"
+  perf_standby="$(jq -r '.performance_standby // false' <<<"${status}")"
+  if [[ "${is_self}" == "true" ]]; then
+    leader_count=$((leader_count + 1))
+    ha_role="active"
+  elif [[ "${perf_standby}" == "true" ]]; then
+    standby_count=$((standby_count + 1))
+    ha_role="performance_standby"
+  else
+    standby_count=$((standby_count + 1))
+    ha_role="standby"
+  fi
+  jq --arg role "${ha_role}" '{initialized, sealed, version, cluster_name, ha_enabled, ha_role: $role}' <<<"${status}"
 done
 
 [[ ${leader_count} -eq 1 && ${standby_count} -eq 2 ]] ||

@@ -31,7 +31,7 @@ plan)
   ;;
 apply)
   terraform -chdir="${PLATFORM_DIR}" validate
-  terraform -chdir="${PLATFORM_DIR}" apply
+  terraform -chdir="${PLATFORM_DIR}" apply -auto-approve
   ;;
 validate)
   terraform -chdir="${PLATFORM_DIR}" validate

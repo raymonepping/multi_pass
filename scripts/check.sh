@@ -24,9 +24,16 @@ fi
 
 if [[ -n "${VAULT_LICENSE_FILE:-}" ]]; then
   [[ -f "${VAULT_LICENSE_FILE}" ]] || die "VAULT_LICENSE_FILE does not exist: ${VAULT_LICENSE_FILE}"
-  info "License input path is configured (contents not inspected or displayed)."
+  info "Vault license found: ${VAULT_LICENSE_FILE}"
 else
   info "VAULT_LICENSE_FILE is not set; infrastructure can proceed, but 'make license' will stop."
+fi
+
+if [[ -n "${TF_LICENSE_PATH:-}" ]]; then
+  [[ -f "${TF_LICENSE_PATH}" ]] || die "TF_LICENSE_PATH does not exist: ${TF_LICENSE_PATH}"
+  info "Terraform license found: ${TF_LICENSE_PATH}"
+else
+  info "TF_LICENSE_PATH is not set; Terraform Enterprise features will be unavailable."
 fi
 
 if [[ -n "${RHSM_ORG:-}" || -n "${RHSM_ACTIVATION_KEY:-}" ]]; then

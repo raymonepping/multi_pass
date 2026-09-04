@@ -23,18 +23,36 @@ status_json() {
 }
 
 unseal_node() {
-  local node="$1" status key_index key
+  local node="$1" status key_index key tls_valid
   status="$(status_json "${node}")"
   if [[ "$(jq -r '.sealed' <<<"${status}")" == "false" ]]; then
     info "${node} is already unsealed."
     return
   fi
-  for ((key_index = 0; key_index < KEY_THRESHOLD; key_index++)); do
-    key="$(jq -er ".unseal_keys_b64[${key_index}]" "${INIT_FILE}")"
-    vault_cli "${node}" operator unseal "${key}" >/dev/null
+
+  tls_valid="no"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+    tls_valid="$(multipass exec "${node}" -- sh -c \
+      'if sudo openssl verify -CAfile /opt/vault/tls/ca.crt /opt/vault/tls/server.crt >/dev/null 2>&1; then printf yes; else printf no; fi')"
+    [[ "${tls_valid}" == "yes" ]] && break
+    sleep 2
   done
-  [[ "$(jq -r '.sealed' <<<"$(status_json "${node}")")" == "false" ]] || die "Failed to unseal ${node}."
-  info "${node} is unsealed."
+  [[ "${tls_valid}" == "yes" ]] || die "TLS certificate is not currently valid according to ${node}'s clock."
+
+  for _ in 1 2; do
+    for ((key_index = 0; key_index < KEY_THRESHOLD; key_index++)); do
+      key="$(jq -er ".unseal_keys_b64[${key_index}]" "${INIT_FILE}")"
+      vault_cli "${node}" operator unseal "${key}" >/dev/null
+    done
+    sleep 3
+    if [[ "$(jq -r '.sealed' <<<"$(status_json "${node}")")" == "false" ]]; then
+      info "${node} is unsealed."
+      return
+    fi
+    info "${node} resealed during startup; retrying once after TLS/cluster stabilization."
+    sleep 5
+  done
+  die "Failed to keep ${node} unsealed. Inspect its Vault service journal."
 }
 
 leader_status="$(status_json vault-1)"

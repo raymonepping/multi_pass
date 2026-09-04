@@ -31,10 +31,10 @@ tls: infra-validate
 install: infra-validate
 	./scripts/install.sh
 
-license: install
+license: infra-validate
 	./scripts/license.sh
 
-configure: tls license
+configure: infra-validate
 	./scripts/configure.sh
 
 bootstrap:

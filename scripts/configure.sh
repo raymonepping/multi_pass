@@ -11,6 +11,13 @@ require_cmd openssl
 require_managed_nodes
 [[ -f "${TLS_DIR}/ca.crt" ]] || die "TLS CA is absent. Run 'make tls' first."
 
+for node in "${NODES[@]}"; do
+  prerequisites_ready="$(multipass exec "${node}" -- sh -c \
+    'if test -x /usr/local/bin/vault && sudo test -r /opt/vault/vault.hclic; then printf yes; else printf no; fi')"
+  [[ "${prerequisites_ready}" == "yes" ]] || \
+    die "Vault or its license is absent on ${node}. Run 'make install' and 'make license' first."
+done
+
 hosts_file="$(mktemp "${TMPDIR:-/tmp}/vault-hosts.XXXXXX")"
 config_file="$(mktemp "${TMPDIR:-/tmp}/vault-config.XXXXXX")"
 trap 'rm -f "${hosts_file}" "${config_file}"' EXIT
@@ -44,9 +51,6 @@ for node in "${NODES[@]}"; do
   multipass exec "${node}" -- sudo install -o vault -g vault -m 0600 /tmp/server.key /opt/vault/tls/server.key
   multipass exec "${node}" -- sudo rm -f /tmp/vault-lab-hosts /tmp/vault.hcl /tmp/vault.service /tmp/ca.crt /tmp/server.crt /tmp/server.key
 
-  multipass exec "${node}" -- sudo test -r /opt/vault/vault.hclic ||
-    die "License is absent on ${node}. Run 'make license' first."
-  multipass exec "${node}" -- sudo /usr/local/bin/vault server -config=/etc/vault.d/vault.hcl -verify-only
   multipass exec "${node}" -- sudo systemctl daemon-reload
   multipass exec "${node}" -- sudo systemctl enable --now vault
   multipass exec "${node}" -- sudo systemctl is-active --quiet vault || {
