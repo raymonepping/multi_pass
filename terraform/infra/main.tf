@@ -6,8 +6,6 @@ locals {
     var.ansible_public_key_path,
     abspath("${path.module}/../../.secrets/ansible/id_ed25519.pub"),
   )
-  ansible_private_key_path = trimsuffix(local.ansible_public_key_path, ".pub")
-  ansible_known_hosts_path = abspath("${path.module}/../../.secrets/ansible/known_hosts")
 }
 
 resource "local_file" "cloud_init" {
@@ -34,30 +32,5 @@ resource "multipass_instance" "vault" {
   # Newly created instances still receive the generated dedicated public key.
   lifecycle {
     ignore_changes = [cloud_init_file]
-  }
-}
-
-resource "ansible_group" "vault" {
-  name = "vault"
-
-  variables = {
-    ansible_user                 = "ubuntu"
-    ansible_become               = true
-    ansible_become_method        = "sudo"
-    ansible_python_interpreter   = "/usr/bin/python3.9"
-    ansible_ssh_private_key_file = local.ansible_private_key_path
-    ansible_ssh_common_args      = "-F /dev/null -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${local.ansible_known_hosts_path}"
-  }
-}
-
-resource "ansible_host" "vault" {
-  for_each = multipass_instance.vault
-
-  name   = each.key
-  groups = [ansible_group.vault.name]
-
-  variables = {
-    ansible_host = each.value.ipv4[0]
-    vault_role   = each.key == local.node_names[0] ? "leader" : "follower"
   }
 }

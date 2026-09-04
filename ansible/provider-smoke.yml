@@ -1,0 +1,31 @@
+---
+- name: Build the in-memory inventory from the Terraform handoff
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    vault_nodes: "{{ vault_nodes_json | from_json }}"
+  tasks:
+    - name: Add the three Vault nodes
+      ansible.builtin.add_host:
+        name: "{{ item.key }}"
+        groups: vault
+        ansible_host: "{{ item.value.ansible_host }}"
+        ansible_user: ubuntu
+        ansible_python_interpreter: /usr/bin/python3.9
+        ansible_ssh_private_key_file: "{{ ansible_private_key_file }}"
+        ansible_ssh_common_args: >-
+          -F /dev/null -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ ansible_known_hosts_file }}
+      loop: "{{ vault_nodes | dict2items }}"
+      changed_when: false
+
+- name: Prove every Terraform-provided host is reachable
+  hosts: vault
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Ping through the dedicated verified SSH connection
+      ansible.builtin.ping:
+      changed_when: false

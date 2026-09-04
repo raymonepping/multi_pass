@@ -7,6 +7,13 @@
   vars:
     vault_nodes: "{{ vault_nodes_json | from_json }}"
   tasks:
+    - name: Force provider-supplied localhost to use a local connection
+      ansible.builtin.add_host:
+        name: localhost
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      changed_when: false
+
     - name: Validate the non-secret Terraform handoff
       ansible.builtin.assert:
         that:

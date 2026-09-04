@@ -1,274 +1,110 @@
-# Ansible — Getting Started
+# Ansible provider workflow
 
-This guide covers everything you need to run, understand, and extend the
-Ansible layer of this project. It assumes `make infra` has completed and
-the VMs are reachable.
-
----
-
-## Prerequisites
+Ansible is launched and supervised by Terraform. The primary entry point is:
 
 ```bash
-brew install ansible
-ansible-galaxy collection install community.crypto ansible.posix
+make ansible-converge
 ```
 
-Verify:
+The command applies `terraform/ansible`. Its `ansible_playbook.vault_lab`
+resource reads the non-secret `ansible_nodes` output from `terraform/infra`,
+runs `ansible/terraform.yml`, waits for completion, and fails Terraform when a
+playbook task fails.
+
+## Why inventory is created in memory
+
+The Ansible provider's `ansible_playbook` resource creates a basic temporary
+inventory and does not automatically consume separate `ansible_host` and
+`ansible_group` resources. The `cloud.terraform` state inventory plugin can
+bridge those resources only after state is current. Its 4.0.0 release also
+fails under this machine's Ansible Core 2.21 because it calls a removed
+`get_bin_path` argument.
+
+`terraform/ansible` therefore passes this shape directly from deployment state:
+
+```json
+{
+  "vault-1": {"ansible_host": "192.0.2.1", "vault_role": "leader"},
+  "vault-2": {"ansible_host": "192.0.2.2", "vault_role": "follower"},
+  "vault-3": {"ansible_host": "192.0.2.3", "vault_role": "follower"}
+}
+```
+
+The first play uses `add_host` to create the `vault` group in memory. The
+second play performs convergence. This has no first-apply state race and does
+not write a generated inventory containing secrets.
+
+## Dependencies and SSH
 
 ```bash
-ansible --version          # should show ansible-core 2.15+
-ansible-galaxy collection list | grep -E "crypto|posix"
+make ansible-deps
+make ansible-ssh
+make ansible-check
 ```
 
----
+Collections are pinned in `ansible/requirements.yml` and installed beneath the
+ignored `.cache/ansible/collections` path. Controller temporary files also use
+the ignored cache rather than the user's global Ansible directory.
 
-## 1. Verify connectivity
+Ansible does not use a personal SSH identity. `make ansible-ssh` creates
+`.secrets/ansible/id_ed25519`, authorizes only its public half on the three
+Terraform-managed nodes, records their ED25519 host keys, and verifies strict
+host-key checking. `-F /dev/null` prevents a macOS-only `UseKeychain` setting in
+the user's SSH config from affecting automation.
 
-Before running any playbook, confirm Ansible can reach all three nodes:
+If a known host key changes, the command fails. Verify that the VM was
+intentionally rebuilt before approving it with:
 
 ```bash
-ansible vault -m ping --private-key ~/.ssh/id_ed25519 -u ubuntu
+CONFIRM_ANSIBLE_HOST_KEY_CHANGE=yes make ansible-ssh
 ```
 
-All three should return `pong`. If any fail, see the
-[SSH troubleshooting section](#ssh-troubleshooting) below.
+## Roles and order
 
----
+`ansible/site.yml` runs:
 
-## 2. Check what Ansible sees
+1. `rhel_prepare` — validates RHEL/ARM64/SELinux, repairs DNS only when needed,
+   performs activation-key RHSM registration only when firewalld is absent,
+   and ensures firewalld is active.
+2. `vault_install` — downloads the pinned archive, verifies SHA-256, creates
+   the service account/directories, installs Vault, opens 8200/8201, and
+   disables swap.
+3. `tls` — preserves the local CA, creates IP-specific node certificates, and
+   distributes them.
+4. `vault_license` — installs the raw license with `root:vault 0640` and does
+   not log its contents.
+5. `vault_configure` — writes `vault.hcl`, peer host entries, and the hardened
+   systemd unit.
+6. `vault_bootstrap` — initializes only once, joins followers before unsealing,
+   unseals restarted nodes, creates/reuses the platform token, and checks Raft.
+7. `vault_validate` — checks service, TLS, seal/HA state, SELinux, swap,
+   firewall, three voters, and license status.
+
+## Reruns and Terraform state
+
+The resource uses `replayable = false`, so an ordinary Terraform plan can be
+clean. `make ansible-converge` explicitly replaces only the playbook resource
+when an operational rerun is requested. Destroying/recreating that resource
+does not destroy any VM or Vault data.
+
+Changes under `ansible`, `templates`, or the platform-admin policy alter an
+automation digest and naturally replace the resource on the next apply.
+
+The provider stores stdout and stderr in `terraform/ansible/terraform.tfstate`.
+Never put a secret in `extra_vars`; paths and topology only are passed there.
+Tasks using RHSM credentials, licenses, unseal keys, or tokens must retain
+`no_log: true`.
+
+## Checks
 
 ```bash
-# Inventory — hosts and their IPs (read live from terraform output)
-ansible-inventory --list
-ansible-inventory --graph
-
-# OS, hostname, IP of all nodes
-ansible vault -m setup \
-  -a "filter=ansible_hostname,ansible_default_ipv4,ansible_distribution*" \
-  --private-key ~/.ssh/id_ed25519 -u ubuntu
-
-# Is Vault running?
-ansible vault -m systemd -a "name=vault" \
-  --private-key ~/.ssh/id_ed25519 -u ubuntu \
-  | grep -E "ActiveState|SubState"
-
-# What version is installed?
-ansible vault -m command -a "/usr/local/bin/vault version" \
-  --private-key ~/.ssh/id_ed25519 -u ubuntu
+make ansible-check       # syntax plus read-only ping proof
+make ansible-plan        # Terraform preview
+make ansible-converge    # run/re-run convergence
+make ansible-validate    # require no orchestration drift
+make state-secret-check  # scan local state without printing secrets
 ```
 
----
-
-## 3. Run the full playbook
-
-Runs all five roles in order against all three nodes:
-
-```bash
-ansible-playbook ansible/site.yml
-```
-
-Everything is idempotent — rerunning produces `ok` results where nothing
-has changed and `changed` only where something actually differs.
-
----
-
-## 4. Run a single role
-
-Each role is tagged. Use `--tags` to run only what you need:
-
-```bash
-ansible-playbook ansible/site.yml --tags tls        # generate/push certs
-ansible-playbook ansible/site.yml --tags install    # Vault binary
-ansible-playbook ansible/site.yml --tags license    # push vault.hclic
-ansible-playbook ansible/site.yml --tags configure  # vault.hcl + service
-ansible-playbook ansible/site.yml --tags bootstrap  # init, unseal, token
-```
-
----
-
-## 5. Dry-run (check mode)
-
-See what *would* change without touching anything:
-
-```bash
-ansible-playbook ansible/site.yml --check --diff
-```
-
-- `ok` — already in the desired state
-- `changed` — would be modified
-- `skipped` — condition not met (e.g. CA already exists)
-
-This is the Ansible equivalent of `terraform plan`.
-
----
-
-## 6. Configuration reference
-
-### `ansible.cfg`
-
-Located at the repo root. Key settings:
-
-| Setting | Value | Purpose |
-|---|---|---|
-| `inventory` | `ansible/inventory/terraform.py` | Dynamic inventory from Terraform |
-| `roles_path` | `ansible/roles` | Where roles are found |
-| `stdout_callback` | `ansible.builtin.default` | Human-readable YAML output |
-| `result_format` | `yaml` | Task output format |
-| `interpreter_python` | `/usr/bin/python3.9` | Python on the RHEL nodes |
-| `ssh_args` | `-F /dev/null ...` | Bypasses macOS `~/.ssh/config` |
-| `become` | `true` | All remote tasks run as root via sudo |
-| `pipelining` | `true` | Faster SSH — fewer round trips |
-
-### `ansible/group_vars/vault.yml`
-
-Single source of truth for all variables. Key ones to know:
-
-| Variable | Default | Notes |
-|---|---|---|
-| `vault_version` | `2.1.0+ent` | Keep in sync with `scripts/common.sh` |
-| `vault_archive_sha256` | `a0fbf...` | Must match the version above |
-| `vault_arch` | `linux_arm64` | RHEL on ARM64 (Multipass on Apple Silicon) |
-| `vault_leader` | `vault-1` | Node used for init, Raft joins, policy uploads |
-| `key_shares` | `3` | Shamir unseal shares |
-| `key_threshold` | `2` | Unseal threshold |
-| `secrets_dir` | `../.secrets` | Local secrets directory (never committed) |
-
-To change the Vault version, update both `vault_version` and
-`vault_archive_sha256` in `group_vars/vault.yml` **and** `VAULT_VERSION`/
-`VAULT_ARCHIVE_SHA256` in `scripts/common.sh`.
-
----
-
-## 7. Dynamic inventory
-
-The inventory script at [`ansible/inventory/terraform.py`](../ansible/inventory/terraform.py)
-reads `terraform output` live every time Ansible runs. There is no static
-hosts file to maintain — IPs update automatically when VMs are rebuilt.
-
-```bash
-# See the raw inventory JSON
-python3 ansible/inventory/terraform.py
-
-# Condensed host list
-ansible-inventory --graph
-```
-
-The script requires `terraform/infra/terraform.tfstate` to exist (i.e.
-`make infra` must have run). If the state is absent, it exits with a clear
-error.
-
----
-
-## 8. Role reference
-
-### `roles/tls`
-
-Generates a CA and per-node certificates **locally** on the control machine
-(your Mac), then pushes the material to each node. Vault is restarted if
-any certificate changes.
-
-- CA lives at `.secrets/tls/ca.crt` / `ca.key`
-- Node certs at `.secrets/tls/vault-{1,2,3}.crt` / `.key`
-- Regenerates a node cert only if the IP SAN is missing or the cert is expired
-- Uses `community.crypto` modules — requires the collection to be installed
-
-### `roles/vault_install`
-
-Downloads the Vault Enterprise zip to `.cache/` once (verified by SHA-256),
-unpacks it, and installs the binary on all nodes. Also creates the `vault`
-system user, required directories, opens firewall ports, and disables swap.
-
-- Download happens on localhost, install happens on each remote node
-- Idempotent — skips the download if the archive is already cached and verified
-
-### `roles/vault_license`
-
-Copies `.secrets/keys/vault.hclic` to `/opt/vault/vault.hclic` on each node
-with `owner: root`, `group: vault`, `mode: 0640`. The file content is never
-logged (`no_log: true`). Override the source path with `VAULT_LICENSE_FILE`.
-
-### `roles/vault_configure`
-
-Writes `vault.hcl` from the Jinja2 template at
-[`roles/vault_configure/templates/vault.hcl.j2`](../ansible/roles/vault_configure/templates/vault.hcl.j2),
-installs the systemd unit, updates `/etc/hosts` with peer addresses, and
-ensures the service is running.
-
-To change Vault's configuration (e.g. add a telemetry stanza), edit the
-template and rerun `--tags configure`.
-
-### `roles/vault_bootstrap`
-
-The most sensitive role. Uses the Vault HTTP API via `ansible.builtin.uri`
-(`delegate_to: localhost`, `become: false`) to:
-
-1. Initialize vault-1 (`operator init`) — only on first run
-2. Write init material to `.secrets/vault-init.json` (mode 0600, localhost only)
-3. Check seal status and unseal each node — skipped if already unsealed
-4. Join vault-2 and vault-3 to the Raft cluster — skipped if already joined
-5. Upload the `lab-platform-admin` policy
-6. Create or reuse the platform token at `.secrets/platform-token`
-7. Verify three Raft voters
-
-All tasks that touch unseal keys or tokens have `no_log: true`.
-
----
-
-## 9. Extending Ansible
-
-### Add a new task to an existing role
-
-Edit the relevant `tasks/main.yml`. Follow the pattern:
-- Remote tasks: no `delegate_to`, `become` inherited from play
-- Local tasks: `delegate_to: localhost`, `become: false`
-- Secret tasks: `no_log: true`
-
-### Add a new role
-
-```bash
-mkdir -p ansible/roles/my_role/{tasks,handlers,templates}
-touch ansible/roles/my_role/tasks/main.yml
-```
-
-Register it in [`ansible/site.yml`](../ansible/site.yml) with a tag:
-
-```yaml
-- role: my_role
-  tags: my_role
-```
-
-### Add a new variable
-
-Add it to [`ansible/group_vars/vault.yml`](../ansible/group_vars/vault.yml).
-Never hardcode paths or version numbers inside a role task file.
-
----
-
-## SSH troubleshooting
-
-**`pong` not returned / connection refused**
-
-Check the VM is running:
-```bash
-multipass list
-```
-
-Inject your key if needed:
-```bash
-multipass exec vault-1 -- bash -c \
-  "echo '$(cat ~/.ssh/id_ed25519.pub)' >> /home/ubuntu/.ssh/authorized_keys"
-```
-
-**`UseKeychain` error**
-
-`ansible.cfg` already sets `ssh_args = -F /dev/null` to bypass
-`~/.ssh/config`. Confirm the config file is being picked up:
-```bash
-ansible --version | grep "config file"
-```
-
-**`community.crypto` module not found**
-
-```bash
-ansible-galaxy collection install community.crypto ansible.posix
-```
+Full Ansible check mode is intentionally not advertised as a safe plan. Some
+bootstrap API operations cannot provide meaningful check-mode predictions.
+Terraform plan plus the syntax/ping proof is the non-mutating gate.

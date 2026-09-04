@@ -24,11 +24,12 @@ double-initialisation and skip work that is already complete.
 
 ### TLS
 
-- **Missing or expired CA:** delete `.secrets/tls/` and rerun `make tls` or
-  `ansible-playbook ansible/site.yml --tags tls`. A new 10-year CA and fresh
-  node certificates will be generated.
-- **Changed VM IP:** rerun `make tls configure` (shell path) or
-  `ansible-playbook ansible/site.yml --tags tls,configure` (Ansible path).
+- **Missing or expired CA:** for an initialized cluster, restore its existing
+  CA and private key from backup. The Ansible role refuses an incomplete pair
+  rather than silently generating a replacement. For a genuinely new lab,
+  `make ansible-converge` creates a 10-year CA and node certificates.
+- **Changed VM IP:** rerun `make tls configure` (shell fallback) or
+  `make ansible-converge` (normal path).
   Node certificates are regenerated only when the current IP SAN is absent from
   the existing cert, so unchanged nodes are skipped. The configure step must
   follow to push the new material to the guests and restart the service.
@@ -36,12 +37,12 @@ double-initialisation and skip work that is already complete.
 ### Vault binary and license
 
 - **Binary absent on a node:** rerun `make install` or
-  `ansible-playbook ansible/site.yml --tags install`. Idempotent — skips nodes
+  `make ansible-converge`. Idempotent — skips nodes
   where the correct version is already present.
 - **Missing Vault license:** place the raw `.hclic` file at
   `.secrets/keys/vault.hclic` (default) or export `VAULT_LICENSE_FILE`
   pointing to another path, then rerun `make license` or
-  `ansible-playbook ansible/site.yml --tags license`.
+  `make ansible-converge`.
 - **License parse error (`expected integer`):** the selected file is not a raw
   HashiCorp license (often a placeholder or env-wrapped value). Point
   `VAULT_LICENSE_ENV_FILE` at an ignored environment file containing
@@ -49,12 +50,14 @@ double-initialisation and skip work that is already complete.
   temporary mode-`0600` file and never printed. (Shell path only — the Ansible
   role reads the raw file directly.)
 - **Expired/invalid license:** replace `.secrets/keys/vault.hclic` and rerun
-  `make license configure` or `ansible-playbook ansible/site.yml --tags license,configure`.
+  `make license configure` or `make ansible-converge`.
 
 ### Vault bootstrap
 
-- **Sealed node after restart:** unseal manually using any two distinct keys
-  from `.secrets/vault-init.json`, then run `make validate`:
+- **Sealed node after restart:** run `make ansible-converge`. The bootstrap role
+  detects sealed nodes and submits the configured threshold from the existing
+  ignored `.secrets/vault-init.json`. It never initializes an existing cluster.
+  Manual recovery remains available using two distinct keys:
 
   ```sh
   KEY0=$(jq -r '.unseal_keys_b64[0]' .secrets/vault-init.json)
@@ -69,33 +72,36 @@ double-initialisation and skip work that is already complete.
 - **Lost `.secrets/vault-init.json`:** do not reinitialise or destroy the
   cluster. Restore the file from your secure backup — it is the only copy of
   the root token and unseal keys.
-- **Expired platform token:** rerun `make bootstrap` (shell path) or
-  `ansible-playbook ansible/site.yml --tags bootstrap` (Ansible path). Both
+- **Expired platform token:** rerun `make bootstrap` (shell fallback) or
+  `make ansible-converge` (normal path). Both
   detect that the existing token is invalid and create a new one.
 
 ### Ansible-specific
 
-- **SSH connection refused:** confirm your public key is in
-  `terraform/infra/cloud-init/rhel.yaml` under `ssh_authorized_keys` and that
-  the VMs were created after that key was added. For existing VMs, inject the
-  key manually:
-  ```sh
-  multipass exec <node> -- bash -c \
-    "echo '$(cat ~/.ssh/id_ed25519.pub)' >> /home/ubuntu/.ssh/authorized_keys"
-  ```
+- **SSH connection refused:** run `make ansible-ssh`. It creates or reuses the
+  dedicated ignored lab key, offers the scoped in-place public-key migration,
+  records host keys, and verifies all three connections. It never uses or
+  modifies the user's normal SSH identity.
+- **SSH host key changed:** first verify the VM was intentionally recreated.
+  Then run `CONFIRM_ANSIBLE_HOST_KEY_CHANGE=yes make ansible-ssh`. An
+  unconfirmed change fails closed.
 - **`sudo: a password is required` on a `delegate_to: localhost` task:** the
   play-level `become: true` is inherited by local tasks. All `delegate_to:
   localhost` tasks in the roles already carry `become: false` to prevent this.
   If you see it after modifying a role, add `become: false` to the affected task.
-- **`UseKeychain` SSH error:** Ansible's bundled SSH does not understand the
-  macOS `UseKeychain` directive. `ansible.cfg` already sets
-  `ssh_args = -F /dev/null` to bypass `~/.ssh/config`. If you see this error,
+- **`UseKeychain` SSH error:** `ansible.cfg` sets `ssh_args = -F /dev/null` to
+  bypass `~/.ssh/config` while retaining strict project-local host-key
+  verification. If you see this error,
   confirm `ansible.cfg` is being picked up (`ansible --version` should show
   the config file path).
-- **`community.crypto` module not found:** install the collection:
+- **Ansible collection missing:** install the exact pinned dependencies:
   ```sh
-  ansible-galaxy collection install community.crypto ansible.posix
+  make ansible-deps
   ```
+- **`cloud.terraform` fails with `get_bin_path`:** this incompatibility with
+  Ansible Core 2.21 is why the workflow uses Terraform's typed output and an
+  in-memory inventory. Do not restore the state inventory plugin unless a
+  compatible release passes the first-run proof.
 
 ### Terraform platform layer
 

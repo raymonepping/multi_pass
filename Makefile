@@ -1,12 +1,15 @@
 SHELL := /bin/bash
 
-.PHONY: check ansible-deps ansible-ssh-prepare ansible-ssh ansible-inventory ansible-check \
+.PHONY: check state-secret-check ansible-deps ansible-ssh-prepare ansible-ssh ansible-inventory ansible-check \
 	infra-plan infra deployment-plan deployment rhel-prepare rhel-unregister infra-validate \
 	ansible-plan ansible-converge ansible-validate tls install license configure bootstrap \
 	validate platform-plan platform platform-validate lab failover-help destroy
 
 check:
 	./scripts/check.sh
+
+state-secret-check:
+	./scripts/check-state-secrets.sh
 
 ansible-deps:
 	./scripts/ansible-deps.sh

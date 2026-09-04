@@ -13,6 +13,14 @@ SSH_DIR="${SECRETS_DIR}/ansible"
 PRIVATE_KEY="${SSH_DIR}/id_ed25519"
 PUBLIC_KEY="${PRIVATE_KEY}.pub"
 KNOWN_HOSTS="${SSH_DIR}/known_hosts"
+scan_file=""
+
+cleanup() {
+  if [[ -n "${scan_file}" && -f "${scan_file}" ]]; then
+    rm -f "${scan_file}"
+  fi
+}
+trap cleanup EXIT HUP INT TERM
 
 prepare_key() {
   prepare_local_dirs
@@ -79,9 +87,7 @@ migrate_existing_nodes() {
 
 trust_hosts() {
   local node ip existing_key scanned_key answer
-  local scan_file
   scan_file="$(mktemp "${SSH_DIR}/known-hosts-scan.XXXXXX")"
-  trap 'rm -f "${scan_file}"' EXIT HUP INT TERM
   touch "${KNOWN_HOSTS}"
   chmod 600 "${KNOWN_HOSTS}"
 
@@ -93,7 +99,7 @@ trust_hosts() {
     scanned_key="$(awk 'NF >= 3 { print $2 " " $3; exit }' "${scan_file}")"
     [[ -n "${scanned_key}" ]] || die "SSH host-key scan returned no ED25519 key for ${node}."
 
-    existing_key="$(ssh-keygen -F "${ip}" -f "${KNOWN_HOSTS}" 2>/dev/null | awk 'NF >= 3 && $1 !~ /^#/ { print $2 " " $3; exit }')"
+    existing_key="$(ssh-keygen -F "${ip}" -f "${KNOWN_HOSTS}" 2>/dev/null | awk 'NF >= 3 && $1 !~ /^#/ { print $2 " " $3; exit }')" || true
     if [[ -n "${existing_key}" && "${existing_key}" != "${scanned_key}" ]]; then
       if [[ "${CONFIRM_ANSIBLE_HOST_KEY_CHANGE:-}" != "yes" ]]; then
         [[ -t 0 ]] || die "SSH host key changed for ${node} (${ip}); verify the VM and rerun with CONFIRM_ANSIBLE_HOST_KEY_CHANGE=yes."
@@ -110,7 +116,7 @@ trust_hosts() {
     fi
   done
   rm -f "${scan_file}"
-  trap - EXIT HUP INT TERM
+  scan_file=""
 }
 
 verify_hosts() {

@@ -21,5 +21,6 @@ run_phase "Vault cluster validation" "${SCRIPT_DIR}/validate.sh"
 run_phase "Vault platform Terraform" "${SCRIPT_DIR}/platform.sh" apply
 run_phase "clean Ansible orchestration plan" "${SCRIPT_DIR}/ansible-run.sh" validate
 run_phase "clean Vault platform plan" "${SCRIPT_DIR}/platform.sh" validate
+run_phase "Terraform state secret boundary" "${SCRIPT_DIR}/check-state-secrets.sh"
 
 printf '\n==> PASS: the complete Vault lab converged through make lab.\n'

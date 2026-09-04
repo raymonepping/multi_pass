@@ -2,11 +2,11 @@
 - name: Require RHEL 9 on ARM64
   ansible.builtin.assert:
     that:
-      - ansible_architecture == 'aarch64'
-      - ansible_distribution == 'RedHat'
-      - ansible_distribution_major_version == '9'
-      - ansible_selinux.status == 'enabled'
-      - ansible_selinux.mode == 'enforcing'
+      - ansible_facts['architecture'] == 'aarch64'
+      - ansible_facts['distribution'] == 'RedHat'
+      - ansible_facts['distribution_major_version'] == '9'
+      - ansible_facts['selinux']['status'] == 'enabled'
+      - ansible_facts['selinux']['mode'] == 'enforcing'
     fail_msg: "{{ inventory_hostname }} must be RHEL 9 ARM64 with SELinux enforcing."
 
 - name: Test Red Hat endpoint resolution
