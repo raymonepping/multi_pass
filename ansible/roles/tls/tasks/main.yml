@@ -1,0 +1,195 @@
+---
+# ansible/roles/tls/tasks/main.yml
+# Mirrors scripts/tls.sh — generates a local CA and per-node certs,
+# then distributes them to the managed nodes.
+
+- name: Ensure local TLS directory exists
+  ansible.builtin.file:
+    path: "{{ tls_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+# ── CA generation (once, on the control machine) ──────────────────────────────
+
+- name: Check whether CA certificate already exists
+  ansible.builtin.stat:
+    path: "{{ tls_dir }}/ca.crt"
+  register: ca_crt
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Check whether CA private key already exists
+  ansible.builtin.stat:
+    path: "{{ tls_dir }}/ca.key"
+  register: ca_key
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Reject an incomplete existing CA pair
+  ansible.builtin.assert:
+    that:
+      - ca_crt.stat.exists == ca_key.stat.exists
+    fail_msg: >-
+      The local CA certificate/key pair is incomplete. Restore it from backup;
+      do not silently generate a replacement for an initialized cluster.
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Generate CA private key
+  community.crypto.openssl_privatekey:
+    path: "{{ tls_dir }}/ca.key"
+    size: 4096
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: not ca_crt.stat.exists
+
+- name: Generate CA CSR with KeyUsage extensions
+  community.crypto.openssl_csr:
+    path: "{{ tls_dir }}/ca.csr"
+    privatekey_path: "{{ tls_dir }}/ca.key"
+    common_name: "Vault Multipass Lab CA"
+    use_common_name_for_san: false
+    basic_constraints:
+      - "CA:TRUE"
+    basic_constraints_critical: true
+    key_usage:
+      - keyCertSign
+      - cRLSign
+    key_usage_critical: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: not ca_crt.stat.exists
+
+- name: Generate self-signed CA certificate
+  community.crypto.x509_certificate:
+    path: "{{ tls_dir }}/ca.crt"
+    csr_path: "{{ tls_dir }}/ca.csr"
+    privatekey_path: "{{ tls_dir }}/ca.key"
+    provider: selfsigned
+    selfsigned_not_after: "+3650d"
+    selfsigned_digest: sha256
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: not ca_crt.stat.exists
+
+- name: Remove CA CSR
+  ansible.builtin.file:
+    path: "{{ tls_dir }}/ca.csr"
+    state: absent
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: not ca_crt.stat.exists
+
+# ── Per-node certificate (regenerate if IP SAN is missing or cert expires) ────
+
+- name: Check existing node certificate
+  ansible.builtin.stat:
+    path: "{{ tls_dir }}/{{ inventory_hostname }}.crt"
+  register: node_crt
+  delegate_to: localhost
+  become: false
+
+- name: Read existing node cert SAN (if present)
+  community.crypto.x509_certificate_info:
+    path: "{{ tls_dir }}/{{ inventory_hostname }}.crt"
+  register: node_cert_info
+  delegate_to: localhost
+  become: false
+  when: node_crt.stat.exists
+  ignore_errors: true
+
+- name: Determine whether node cert needs regeneration
+  ansible.builtin.set_fact:
+    tls_regenerate: >-
+      {{
+        not node_crt.stat.exists
+        or (node_cert_info is defined and node_cert_info.expired | default(false))
+        or (node_cert_info is defined and
+            ('IP:' + ansible_host) not in (node_cert_info.subject_alt_name | default([])))
+      }}
+
+- name: Generate node private key
+  community.crypto.openssl_privatekey:
+    path: "{{ tls_dir }}/{{ inventory_hostname }}.key"
+    size: 3072
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: tls_regenerate
+
+- name: Generate node CSR
+  community.crypto.openssl_csr:
+    path: "{{ tls_dir }}/{{ inventory_hostname }}.csr"
+    privatekey_path: "{{ tls_dir }}/{{ inventory_hostname }}.key"
+    common_name: "{{ inventory_hostname }}"
+    subject_alt_name:
+      - "DNS:{{ inventory_hostname }}"
+      - "DNS:localhost"
+      - "IP:{{ ansible_host }}"
+      - "IP:127.0.0.1"
+  delegate_to: localhost
+  become: false
+  when: tls_regenerate
+
+- name: Sign node certificate with local CA
+  community.crypto.x509_certificate:
+    path: "{{ tls_dir }}/{{ inventory_hostname }}.crt"
+    csr_path: "{{ tls_dir }}/{{ inventory_hostname }}.csr"
+    ownca_path: "{{ tls_dir }}/ca.crt"
+    ownca_privatekey_path: "{{ tls_dir }}/ca.key"
+    provider: ownca
+    ownca_not_after: "+825d"
+    ownca_digest: sha256
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: tls_regenerate
+
+- name: Remove temporary CSR
+  ansible.builtin.file:
+    path: "{{ tls_dir }}/{{ inventory_hostname }}.csr"
+    state: absent
+  delegate_to: localhost
+  become: false
+  when: tls_regenerate
+
+# ── Push TLS material to the node ─────────────────────────────────────────────
+
+- name: Push CA certificate
+  ansible.builtin.copy:
+    src: "{{ tls_dir }}/ca.crt"
+    dest: "{{ vault_tls_dir }}/ca.crt"
+    owner: vault
+    group: vault
+    mode: "0644"
+  notify: Restart vault
+
+- name: Push node certificate
+  ansible.builtin.copy:
+    src: "{{ tls_dir }}/{{ inventory_hostname }}.crt"
+    dest: "{{ vault_tls_dir }}/server.crt"
+    owner: vault
+    group: vault
+    mode: "0644"
+  notify: Restart vault
+
+- name: Push node private key
+  ansible.builtin.copy:
+    src: "{{ tls_dir }}/{{ inventory_hostname }}.key"
+    dest: "{{ vault_tls_dir }}/server.key"
+    owner: vault
+    group: vault
+    mode: "0600"
+  notify: Restart vault
